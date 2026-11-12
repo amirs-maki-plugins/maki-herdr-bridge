@@ -435,13 +435,19 @@ end
 local RESTORE_POLL_MS = 250
 local RESTORE_POLL_FAST_TRIES = 120
 local RESTORE_POLL_SLOW_MS = 2000
+-- Herdr starts restored panes one at a time, so the line can be late, but a
+-- pane that is still silent after five minutes is not a restore at all.
+local RESTORE_POLL_TRIES = 270
 
 local function poll_restore(n)
   if not restore_armed then
     return
   end
-  local st, perr = maki.ui.input()
+  local st = maki.ui.input()
   if try_restore(st) then
+    return
+  end
+  if n >= RESTORE_POLL_TRIES then
     return
   end
   local delay = n < RESTORE_POLL_FAST_TRIES and RESTORE_POLL_MS or RESTORE_POLL_SLOW_MS
