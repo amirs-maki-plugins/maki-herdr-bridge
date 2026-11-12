@@ -101,7 +101,7 @@ local function report_argv(bin, pane, sid, state, seq)
   }
 end
 
-local function metadata_argv(bin, pane, title, seq)
+local function metadata_argv(bin, pane, title, seq, dir)
   local argv = {
     bin,
     "pane",
@@ -115,6 +115,8 @@ local function metadata_argv(bin, pane, title, seq)
     SOURCE,
     "--seq",
     tostring(seq),
+    -- Clears the parenthesized agent name earlier versions reported.
+    "--clear-display-agent",
   }
   if title then
     argv[#argv + 1] = "--title"
@@ -129,7 +131,27 @@ local function metadata_argv(bin, pane, title, seq)
     argv[#argv + 1] = "--clear-token"
     argv[#argv + 1] = "session"
   end
+  if dir then
+    -- The sidebar row renders this as $dir: the session's directory name.
+    argv[#argv + 1] = "--token"
+    argv[#argv + 1] = "dir=" .. dir
+  else
+    argv[#argv + 1] = "--clear-token"
+    argv[#argv + 1] = "dir"
+  end
   return argv
+end
+
+-- Last path component, or nil for a root path or a missing value.
+local function dir_name(cwd)
+  if type(cwd) ~= "string" or cwd == "" then
+    return nil
+  end
+  local name = cwd:match("([^/]+)/*$")
+  if not name or name == "" then
+    return nil
+  end
+  return name
 end
 
 local M = {
@@ -251,15 +273,17 @@ end
 
 -- Display only. Its own source and its own sequence, so a title report can
 -- never change lifecycle authority.
-local function send_title(title)
+local function send_title(title, dir)
   title = normalize_title(title)
-  if title_sent and title == last_title then
+  dir = normalize_title(dir)
+  local key = tostring(title) .. "\0" .. tostring(dir)
+  if title_sent and key == last_title then
     return
   end
   title_sent = true
-  last_title = title
+  last_title = key
   title_seq = next_seq(title_seq)
-  if not spawn(metadata_argv(bin, pane, title, title_seq)) then
+  if not spawn(metadata_argv(bin, pane, title, title_seq, dir)) then
     -- Nothing reached herdr: report the same title again on the next event.
     title_sent = false
     last_title = nil
@@ -275,7 +299,7 @@ local function sync_focused()
     return false
   end
   send_state(s.id, state_for(s.status))
-  send_title(s.title)
+  send_title(s.title, dir_name(s.cwd))
   return true
 end
 
@@ -310,7 +334,8 @@ maki.api.create_autocmd("SessionFocusChanged", {
 maki.api.create_autocmd("SessionTitleChanged", {
   callback = function(ev)
     if ev.data.focused then
-      send_title(ev.data.title)
+      local cur = maki.session.read()
+      send_title(ev.data.title, cur and dir_name(cur.cwd) or nil)
     end
   end,
 })

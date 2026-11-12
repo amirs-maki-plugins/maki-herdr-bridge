@@ -121,4 +121,19 @@ cases.metadata_argv_clears_a_missing_title = function(check)
   check.eq(joined:find("%-%-token session="), nil)
 end
 
+cases.metadata_argv_carries_the_directory = function(check)
+  local argv = t.metadata_argv("/bin/herdr", "w1:p3", "refactor auth", 9, "maki")
+  local joined = table.concat(argv, " ")
+  check.has(joined, "--token dir=maki")
+  check.has(joined, "--clear-display-agent")
+  check.eq(joined:find("%-%-display%-agent"), nil, "no display name is set")
+end
+
+cases.metadata_argv_clears_a_missing_directory = function(check)
+  local argv = t.metadata_argv("/bin/herdr", "w1:p3", "refactor auth", 10, nil)
+  local joined = table.concat(argv, " ")
+  check.has(joined, "--clear-token dir")
+  check.eq(joined:find("%-%-token dir="), nil)
+end
+
 return { name = "herdr_bridge", cases = cases }

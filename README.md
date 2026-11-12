@@ -30,8 +30,8 @@ and its own sequence number.
    the state, the maki session id, and the resume command
    `maki --resume <id>`. Herdr uses this state instead of reading the screen.
 2. `herdr pane report-metadata`, source `maki-herdr-title`. This is display
-   only: the title, and the token `session`. A metadata report can never
-   change the state or the resume command.
+   only: the title, the token `session`, and the token `dir`. A metadata
+   report can never change the state or the resume command.
 
 What this gives you:
 
@@ -41,7 +41,8 @@ What this gives you:
   state.
 - After a Herdr restart, the pane runs `maki --resume <id>` in the same
   directory, so the same maki session comes back.
-- The session title appears in the agent row, through the `session` token.
+- The session title and the session directory appear in the agent row, through
+  the `session` and `dir` tokens.
 
 ## Status mapping
 
@@ -58,18 +59,23 @@ its state and its resume command.
 
 ## Show the title in the sidebar
 
-Add the `session` token to the agent rows in `~/.config/herdr/config.toml`:
+Add the tokens to the agent rows in `~/.config/herdr/config.toml`. This layout
+puts the title on its own line, then the directory:
 
 ```toml
-[ui.sidebar.agents]
-rows = [
-  ["state_icon", "machine", "workspace", "tab"],
-  ["agent", "$session"],
+[ui.sidebar.agents.rows_by_agent]
+maki = [
+  ["state_icon", "$session"],
+  ["$dir"],
 ]
 ```
 
 Then reload the Herdr config. Herdr caps metadata text at 80 characters and
-trims it. An empty title clears both the title and the token.
+trims it. An empty title clears both the title and the token. The `dir` token
+is the last component of the session's working directory.
+
+The plugin does not set a display name. The agent row shows the name Herdr
+detects, `maki`.
 
 ## Requirements
 
