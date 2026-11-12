@@ -1,0 +1,9 @@
+min_maki_version = "0.7.0"
+
+[permissions]
+# Both reports are `herdr` processes started with maki.fn.jobstart, which
+# needs `run`. Nothing else is requested: maki.session.read is metadata only
+# and needs no permission, and the herdr binary is never probed with
+# maki.fn.executable, because that would cost fs_read for a guard that
+# jobstart already covers.
+run = true
