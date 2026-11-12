@@ -35,6 +35,39 @@ local STARTUP_TRIES = 5
 -- keeps the cached title equal to what herdr stores, so the next diff is real.
 local TITLE_MAX = 80
 
+-- Herdr restores a pane by spawning the configured shell, which here is maki
+-- itself, and typing the saved resume command into its terminal. No shell runs
+-- that line, so the characters land in the chat input; the plugin recognizes
+-- them there and opens the session itself. The line is the resume command herdr
+-- saves, which is why the report below hands it this exact shape.
+local RESTORE_MARKER = "maki-herdr-resume"
+local RESTORE_FLAG = "--herdr-restore"
+local RESTORE_PREFIX = RESTORE_MARKER .. " " .. RESTORE_FLAG .. " "
+
+-- Session ids and the two words above only ever spell [A-Za-z0-9_.-].
+local function restore_target(text)
+  if type(text) ~= "string" or text:sub(1, #RESTORE_PREFIX) ~= RESTORE_PREFIX then
+    return nil
+  end
+  local sid = text:sub(#RESTORE_PREFIX + 1)
+  if sid == "" or sid:find("[^%w_.-]") then
+    return nil
+  end
+  return sid
+end
+
+-- True while the whole composer could still become that one line, which is how
+-- a line typed character by character is recognized before it is complete.
+local function restore_prefix(text)
+  if type(text) ~= "string" then
+    return false
+  end
+  if #text <= #RESTORE_PREFIX then
+    return RESTORE_PREFIX:sub(1, #text) == text
+  end
+  return restore_target(text) ~= nil
+end
+
 local function state_for(status)
   return STATE[status]
 end
@@ -46,8 +79,8 @@ local function next_seq(prev, now)
   return math.max((prev or 0) + 1, (now or os.time()) * 1000)
 end
 
-local function same_report(last, sid, state, cwd)
-  return last ~= nil and last.sid == sid and last.state == state and last.cwd == cwd
+local function same_report(last, sid, state)
+  return last ~= nil and last.sid == sid and last.state == state
 end
 
 -- Surrounding blanks and control characters would make herdr's stored value
@@ -76,7 +109,7 @@ local function normalize_title(title)
   return title
 end
 
-local function report_argv(bin, pane, sid, state, seq, cwd)
+local function report_argv(bin, pane, sid, state, seq)
   return {
     bin,
     "pane",
@@ -92,13 +125,14 @@ local function report_argv(bin, pane, sid, state, seq, cwd)
     tostring(seq),
     "--agent-session-id",
     sid,
-    -- Herdr restores the pane in its own directory and runs this there. The
-    -- first word must be a plain command name on PATH, never a path. The
-    -- wrapper enters the directory the session was last in, because herdr
-    -- saves the pane's spawn directory, not one a /cd changed.
+    -- Herdr types this line into the pane's terminal on restore. maki reads it
+    -- from the chat input, but a shell could still run it, so the first word is
+    -- a real script on PATH and never a path. The session carries its own
+    -- directory, so the line does not need `cwd`: opening a session adopts the
+    -- directory it was saved in.
     "--",
-    "maki-herdr-resume",
-    cwd or "",
+    RESTORE_MARKER,
+    RESTORE_FLAG,
     sid,
   }
 end
@@ -164,6 +198,9 @@ local M = {
     normalize_title = normalize_title,
     report_argv = report_argv,
     metadata_argv = metadata_argv,
+    restore_target = restore_target,
+    restore_prefix = restore_prefix,
+    RESTORE_PREFIX = RESTORE_PREFIX,
   },
 }
 
@@ -215,7 +252,7 @@ local function launch(item)
   state_seq = next_seq(state_seq)
   in_flight = true
   active = item
-  local argv = report_argv(bin, pane, item.sid, item.state, state_seq, item.cwd)
+  local argv = report_argv(bin, pane, item.sid, item.state, state_seq)
   local id = fn.jobstart(argv, {
     scope = "plugin",
     stdout = false,
@@ -251,13 +288,13 @@ pump = function()
   end
   local item = queued
   queued = nil
-  if same_report(sent, item.sid, item.state, item.cwd) then
+  if same_report(sent, item.sid, item.state) then
     return
   end
   launch(item)
 end
 
-local function send_state(sid, state, cwd)
+local function send_state(sid, state)
   if not sid or not state then
     return
   end
@@ -266,10 +303,10 @@ local function send_state(sid, state, cwd)
   -- While a report is in flight, it, not the last accepted one, is what the
   -- next state has to differ from.
   local baseline = in_flight and active or sent
-  if same_report(baseline, sid, state, cwd) or same_report(queued, sid, state, cwd) then
+  if same_report(baseline, sid, state) or same_report(queued, sid, state) then
     return
   end
-  queued = { sid = sid, state = state, cwd = cwd }
+  queued = { sid = sid, state = state }
   pump()
 end
 
@@ -300,7 +337,7 @@ local function sync_focused()
     -- The UI has no session yet, or the host is detaching.
     return false
   end
-  send_state(s.id, state_for(s.status), s.cwd)
+  send_state(s.id, state_for(s.status))
   send_title(s.title, dir_name(s.cwd))
   return true
 end
@@ -322,19 +359,17 @@ end
 maki.api.create_autocmd("SessionStatusChanged", {
   callback = function(ev)
     if ev.data.focused then
-      local cur = maki.session.read()
-      send_state(ev.data.session_id, state_for(ev.data.status), cur and cur.cwd or nil)
+      send_state(ev.data.session_id, state_for(ev.data.status))
     end
   end,
 })
 
--- A /cd must reach herdr: the resume command carries the directory, and the
--- pane's saved spawn directory never changes.
+-- A /cd must reach herdr's sidebar: the pane's saved spawn directory never
+-- changes, and the directory token is display only.
 maki.api.create_autocmd("SessionCwdChanged", {
   callback = function(ev)
     if ev.data.focused then
       local cur = maki.session.read()
-      send_state(cur and cur.id or ev.data.session_id, cur and state_for(cur.status) or nil, ev.data.cwd)
       send_title(cur and cur.title or nil, dir_name(ev.data.cwd))
     end
   end,
@@ -343,6 +378,73 @@ maki.api.create_autocmd("SessionCwdChanged", {
 maki.api.create_autocmd("SessionFocusChanged", {
   callback = function()
     sync_focused()
+  end,
+})
+
+-- Opens the session herdr asked for, from a line herdr typed into a pane it
+-- could not run a command in. The line must never become a message, so it is
+-- cleared first, while its version is still the tab's.
+local function restore(sid, st)
+  local msgs = maki.session.messages({ last = 1 })
+  if msgs and #msgs > 0 then
+    -- A conversation is already open here: the line is not a restore.
+    return
+  end
+  if st.version and st.text then
+    local done, err = maki.ui.input_edit({
+      start = 0,
+      stop = #st.text,
+      text = "",
+      version = st.version,
+      session_id = st.session_id,
+    })
+    if not done then
+      warn("could not clear the restore line: " .. tostring(err))
+    end
+  end
+  local ok, err = maki.session.focus(sid)
+  if not ok then
+    warn(string.format("could not open session %s: %s", sid, tostring(err)))
+    maki.notify("maki-herdr: could not restore session " .. sid, "error")
+  end
+end
+
+-- Armed only until the composer stops being able to become the restore line:
+-- a match consumes it, any other text disarms, and so does a sent message.
+local restore_armed = true
+
+local function try_restore(st)
+  if not restore_armed or not st or st.text == nil then
+    return
+  end
+  local sid = restore_target(st.text)
+  if not sid then
+    return
+  end
+  restore_armed = false
+  restore(sid, st)
+end
+
+maki.api.create_autocmd("TurnStart", {
+  callback = function()
+    restore_armed = false
+  end,
+})
+
+maki.api.create_autocmd("InputChanged", {
+  callback = function(ev)
+    if not restore_armed or ev.data.cursor_only then
+      return
+    end
+    local text = ev.data.text
+    if text == nil then
+      return
+    end
+    if not restore_prefix(text) then
+      restore_armed = false
+      return
+    end
+    try_restore(ev.data)
   end,
 })
 
@@ -374,9 +476,16 @@ maki.api.create_autocmd({ "SessionReset", "SessionEnd" }, {
 })
 
 -- The first focus at startup fires an event, but under /reload and on a fast
--- start it can land before the session is readable, so retry a few times.
+-- start it can land before the session is readable, so retry a few times. The
+-- restore line is looked for here too: herdr writes it the moment it spawns
+-- the pane, so it can be in the composer before this code runs, and then no
+-- further change would ever carry it.
 maki.defer_fn(function()
   local function attempt(n)
+    local st = maki.ui.input()
+    if st and st.text then
+      try_restore(st)
+    end
     if sync_focused() then
       return
     end

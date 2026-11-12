@@ -15,7 +15,7 @@ install prompt:
 
 ```lua
 maki.pack.add({
-  { src = "https://github.com/amirs-maki-plugins/maki-herdr-bridge", version = "v1.0.2" },
+  { src = "https://github.com/amirs-maki-plugins/maki-herdr-bridge", version = "v1.1.0" },
 })
 ```
 
@@ -28,7 +28,8 @@ and its own sequence number.
 
 1. `herdr pane report-agent`, source `maki-herdr`. This is lifecycle authority:
    the state, the maki session id, and the resume command
-   `maki --resume <id>`. Herdr uses this state instead of reading the screen.
+   `maki-herdr-resume --herdr-restore <id>`. Herdr uses this state instead of
+   reading the screen.
 2. `herdr pane report-metadata`, source `maki-herdr-title`. This is display
    only: the title, the token `session`, and the token `dir`. A metadata
    report can never change the state or the resume command.
@@ -39,11 +40,33 @@ What this gives you:
   screen.
 - `herdr agent wait`, `herdr agent prompt`, and notifications follow that
   state.
-- After a Herdr restart, the pane runs `maki-herdr-resume <dir> <id>` in the
-  same pane, so the session comes back in the directory it was last in,
-  including one changed by `/cd`.
+- After a Herdr restart, the pane comes back in the session it had, in the
+  directory that session was last in, including one changed by `/cd`. See
+  [How the pane resumes](#how-the-pane-resumes).
 - The session title and the session directory appear in the agent row, through
   the `session` and `dir` tokens.
+
+## How the pane resumes
+
+Herdr restores a pane by starting the pane's shell and typing the saved resume
+command into its terminal, because a resume is a shell command line. When
+maki itself is the pane's shell, there is no shell to run that line, so the
+characters arrive in the chat input instead.
+
+The plugin reads the line from the chat input and opens the session itself:
+
+1. A fresh pane starts with an empty composer and a blank session, so the
+   handler is armed.
+2. While the whole composer can still become the line
+   `maki-herdr-resume --herdr-restore <id>`, the handler stays armed. Any other
+   text, and any sent message, disarms it for the rest of the maki process.
+3. On a complete line, the handler clears the composer, so the line never
+   becomes a message, then focuses that session. A session nothing runs is
+   loaded from disk, and it brings its own working directory.
+
+This works the same when maki sits in a shell, where the line does run: the
+shell exits maki into `maki-herdr-resume`, which is why that script stays on
+`PATH`.
 
 ## Status mapping
 
@@ -85,8 +108,10 @@ detects, `maki`.
 - `HERDR_ENV=1`, `HERDR_BIN_PATH`, and `HERDR_PANE_ID` in the environment.
   Herdr sets all three in every pane it manages.
 - maki 0.7.0 or newer.
-- The `run` permission, for the two `herdr` jobs. The plugin asks for nothing
-  else.
+- The `run` permission, for the two `herdr` jobs. The restore handler also
+  needs `session_read` to see the chat input, `input` to clear it, and `agent`
+  and `session_write` because maki prices a text change like a message. The
+  plugin sends nothing.
 
 ## Known limits
 
@@ -94,20 +119,24 @@ detects, `maki`.
   drops, which is the moment maki quits, so the call would die in flight.
   Herdr clears the agent and the resume command about a second after the pane
   returns to its shell prompt.
-- The resume command is `maki-herdr-resume <dir> <id>`, a small wrapper on
-  `PATH` that enters `<dir>` and then runs `maki --resume <id>`. Install it as
+- The resume command is `maki-herdr-resume --herdr-restore <id>`, a small
+  wrapper on `PATH` for the pane whose shell really is a shell. Install it as
   `~/.local/bin/maki-herdr-resume`:
 
   ```sh
   #!/bin/sh
-  dir=$1
-  sid=$2
-  [ -n "$sid" ] && shift 2
-  [ -n "$dir" ] && [ -d "$dir" ] && cd "$dir"
-  exec maki --resume "$sid" "$@"
+  case $1 in
+  --herdr-restore)
+    shift
+    sid=$1
+    [ -n "$sid" ] && shift
+    exec maki --resume "$sid" "$@"
+    ;;
+  esac
   ```
 
-  Without the wrapper Herdr falls back to a plain shell in the pane directory.
+  A shell in the pane runs it after maki exits. Without the wrapper, and
+  without the plugin, Herdr falls back to a plain shell in the pane directory.
   The command does not carry maki start flags such as a model or a mode.
 - Herdr does not restore metadata after a server restart. The next maki start
   reports the title again.
@@ -138,5 +167,6 @@ config's, which is why the spec command lives in the package.
 ## Tests
 
 `lua/herdr_bridge_spec.lua` covers the pure helpers: the status map, the
-sequence counter, the deduplication key, the title normalization, and both
-command line shapes. Run it with `/herdr-bridge-spec` after installing.
+sequence counter, the deduplication key, the title normalization, both command
+line shapes, and the restore line matcher. Run it with `/herdr-bridge-spec`
+after installing.

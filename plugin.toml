@@ -2,8 +2,16 @@ min_maki_version = "0.7.0"
 
 [permissions]
 # Both reports are `herdr` processes started with maki.fn.jobstart, which
-# needs `run`. Nothing else is requested: maki.session.read is metadata only
-# and needs no permission, and the herdr binary is never probed with
-# maki.fn.executable, because that would cost fs_read for a guard that
-# jobstart already covers.
+# needs `run`. maki.session.read is metadata only and needs no permission, and
+# the herdr binary is never probed with maki.fn.executable, because that would
+# cost fs_read for a guard that jobstart already covers.
 run = true
+# Herdr cannot run the resume command in a pane whose shell is maki itself, so
+# it types the command into the chat input instead. Reading that line from
+# `InputChanged` needs `session_read` and clearing it needs `input`. Clearing
+# is a text change, which maki prices like a message: `agent` and
+# `session_write`. Nothing here sends anything.
+input = true
+session_read = true
+agent = true
+session_write = true

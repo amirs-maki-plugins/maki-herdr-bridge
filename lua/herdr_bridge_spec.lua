@@ -72,7 +72,7 @@ cases.title_cap_keeps_utf8_whole = function(check)
 end
 
 cases.resume_argv_shape = function(check)
-  local argv = t.report_argv("/bin/herdr", "w1:p3", "sess1", "blocked", 42, "/src/repo")
+  local argv = t.report_argv("/bin/herdr", "w1:p3", "sess1", "blocked", 42)
   local joined = table.concat(argv, " ")
   check.eq(argv[1], "/bin/herdr")
   check.eq(argv[2], "pane")
@@ -83,11 +83,11 @@ cases.resume_argv_shape = function(check)
   check.has(joined, "--state blocked")
   check.has(joined, "--seq 42")
   check.has(joined, "--agent-session-id sess1")
-  check.has(joined, "-- maki-herdr-resume /src/repo sess1", "the resume command is the last argument group")
+  check.has(joined, "-- maki-herdr-resume --herdr-restore sess1", "the resume command is the last argument group")
 end
 
 cases.resume_first_word_is_a_bare_name = function(check)
-  local argv = t.report_argv("/bin/herdr", "w1:p3", "s", "idle", 1, "/src/repo")
+  local argv = t.report_argv("/bin/herdr", "w1:p3", "s", "idle", 1)
   local dash
   for i, a in ipairs(argv) do
     if a == "--" then
@@ -95,8 +95,33 @@ cases.resume_first_word_is_a_bare_name = function(check)
     end
   end
   check.eq(argv[dash + 1], "maki-herdr-resume", "herdr requires a plain command name on PATH")
-  check.eq(argv[dash + 2], "/src/repo", "the wrapper enters the session directory first")
-  check.eq(argv[dash + 3], "s", "then resumes the session")
+  check.eq(argv[dash + 2], "--herdr-restore", "the marker lives in the first argument")
+  check.eq(argv[dash + 3], "s", "then the session herdr types for the plugin to read")
+end
+
+cases.resume_line_is_the_reported_argv = function(check)
+  local argv = t.report_argv("/bin/herdr", "w1:p3", "sess1", "idle", 1)
+  local line = table.concat(argv, " ", #argv - 2)
+  check.eq(line, "maki-herdr-resume --herdr-restore sess1", "herdr types exactly this line")
+end
+
+cases.restore_target_reads_the_whole_line_only = function(check)
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1"), "sess1")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "a.b-c_1"), "a.b-c_1")
+  check.eq(t.restore_target("maki-herdr-resume --herdr-restore"), nil, "no session yet")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1 "), nil, "trailing text is not the line")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "a/b"), nil, "a path is not a session id")
+  check.eq(t.restore_target("maki --resume sess1"), nil, "another agent's command is not ours")
+  check.eq(t.restore_target(nil), nil)
+end
+
+cases.restore_prefix_follows_the_line_character_by_character = function(check)
+  check.eq(t.restore_prefix(""), true, "an empty composer can still become the line")
+  check.eq(t.restore_prefix("maki-herdr"), true)
+  check.eq(t.restore_prefix(t.RESTORE_PREFIX), true)
+  check.eq(t.restore_prefix(t.RESTORE_PREFIX .. "sess"), true)
+  check.eq(t.restore_prefix("maki herdr"), false, "typing something else disarms the handler")
+  check.eq(t.restore_prefix(t.RESTORE_PREFIX .. "sess1 x"), false)
 end
 
 cases.metadata_argv_sets_title_and_token = function(check)
