@@ -44,9 +44,16 @@ local RESTORE_MARKER = "maki-herdr-resume"
 local RESTORE_FLAG = "--herdr-restore"
 local RESTORE_PREFIX = RESTORE_MARKER .. " " .. RESTORE_FLAG .. " "
 
--- Session ids and the two words above only ever spell [A-Za-z0-9_.-].
+-- Session ids and the two words above only spell [A-Za-z0-9_.-], and the line
+-- must be the whole of the composer: anything the user added is not a restore.
+-- Herdr sends the line with a carriage return, which lands in the composer as a
+-- newline, so trailing whitespace is part of the line and not part of the id.
 local function restore_target(text)
-  if type(text) ~= "string" or text:sub(1, #RESTORE_PREFIX) ~= RESTORE_PREFIX then
+  if type(text) ~= "string" then
+    return nil
+  end
+  text = text:gsub("%s+$", "")
+  if text:sub(1, #RESTORE_PREFIX) ~= RESTORE_PREFIX then
     return nil
   end
   local sid = text:sub(#RESTORE_PREFIX + 1)
@@ -54,18 +61,6 @@ local function restore_target(text)
     return nil
   end
   return sid
-end
-
--- True while the whole composer could still become that one line, which is how
--- a line typed character by character is recognized before it is complete.
-local function restore_prefix(text)
-  if type(text) ~= "string" then
-    return false
-  end
-  if #text <= #RESTORE_PREFIX then
-    return RESTORE_PREFIX:sub(1, #text) == text
-  end
-  return restore_target(text) ~= nil
 end
 
 local function state_for(status)
@@ -199,10 +194,10 @@ local M = {
     report_argv = report_argv,
     metadata_argv = metadata_argv,
     restore_target = restore_target,
-    restore_prefix = restore_prefix,
     RESTORE_PREFIX = RESTORE_PREFIX,
   },
 }
+
 
 local bin = uv.os_getenv("HERDR_BIN_PATH")
 local pane = uv.os_getenv("HERDR_PANE_ID")
@@ -385,11 +380,6 @@ maki.api.create_autocmd("SessionFocusChanged", {
 -- could not run a command in. The line must never become a message, so it is
 -- cleared first, while its version is still the tab's.
 local function restore(sid, st)
-  local msgs = maki.session.messages({ last = 1 })
-  if msgs and #msgs > 0 then
-    -- A conversation is already open here: the line is not a restore.
-    return
-  end
   if st.version and st.text then
     local done, err = maki.ui.input_edit({
       start = 0,
@@ -409,41 +399,80 @@ local function restore(sid, st)
   end
 end
 
--- Armed only until the composer stops being able to become the restore line:
--- a match consumes it, any other text disarms, and so does a sent message.
+-- Armed until the line is seen or a message is sent. A stray change must not
+-- disarm it: only the exact line does anything, so waiting costs nothing.
 local restore_armed = true
+
+-- Owns <CR> only while armed, so the Enter herdr sends with the line cannot turn
+-- it into a message, and gives the key back the moment the window closes.
+local restore_key = false
+
+local function disarm()
+  restore_armed = false
+  if restore_key then
+    pcall(maki.keymap.del, "i", "<CR>")
+    restore_key = false
+  end
+end
 
 local function try_restore(st)
   if not restore_armed or not st or st.text == nil then
-    return
+    return false
   end
   local sid = restore_target(st.text)
   if not sid then
+    return false
+  end
+  disarm()
+  restore(sid, st)
+  return true
+end
+
+-- Herdr writes the line as soon as it spawns the pane, often before this file
+-- is loaded, and then no "InputChanged" carries it: the text just sits in the
+-- composer. Watch the composer for the life of the process instead, quickly at
+-- first and slowly afterwards, until the line is seen or a turn starts.
+local RESTORE_POLL_MS = 250
+local RESTORE_POLL_FAST_TRIES = 120
+local RESTORE_POLL_SLOW_MS = 2000
+
+local function poll_restore(n)
+  if not restore_armed then
     return
   end
-  restore_armed = false
-  restore(sid, st)
+  local st, perr = maki.ui.input()
+  if try_restore(st) then
+    return
+  end
+  local delay = n < RESTORE_POLL_FAST_TRIES and RESTORE_POLL_MS or RESTORE_POLL_SLOW_MS
+  maki.defer_fn(function()
+    poll_restore(n + 1)
+  end, delay)
 end
+
+maki.defer_fn(function()
+  poll_restore(1)
+end, RESTORE_POLL_MS)
 
 maki.api.create_autocmd("TurnStart", {
   callback = function()
-    restore_armed = false
+    disarm()
   end,
 })
 
+-- A throw here must not break the load: the reports matter more than the key.
+restore_key = pcall(maki.keymap.set, "i", "<CR>", function(ev)
+  if ev.input and try_restore(ev.input) then
+    -- The key is consumed: the line never becomes a message.
+    return
+  end
+  if ev.fallback then
+    ev.fallback()
+  end
+end)
+
 maki.api.create_autocmd("InputChanged", {
   callback = function(ev)
-    if not restore_armed or ev.data.cursor_only then
-      return
-    end
-    local text = ev.data.text
-    if text == nil then
-      return
-    end
-    if not restore_prefix(text) then
-      restore_armed = false
-      return
-    end
     try_restore(ev.data)
   end,
 })
@@ -476,16 +505,9 @@ maki.api.create_autocmd({ "SessionReset", "SessionEnd" }, {
 })
 
 -- The first focus at startup fires an event, but under /reload and on a fast
--- start it can land before the session is readable, so retry a few times. The
--- restore line is looked for here too: herdr writes it the moment it spawns
--- the pane, so it can be in the composer before this code runs, and then no
--- further change would ever carry it.
+-- start it can land before the session is readable, so retry a few times.
 maki.defer_fn(function()
   local function attempt(n)
-    local st = maki.ui.input()
-    if st and st.text then
-      try_restore(st)
-    end
     if sync_focused() then
       return
     end

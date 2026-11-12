@@ -109,19 +109,20 @@ cases.restore_target_reads_the_whole_line_only = function(check)
   check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1"), "sess1")
   check.eq(t.restore_target(t.RESTORE_PREFIX .. "a.b-c_1"), "a.b-c_1")
   check.eq(t.restore_target("maki-herdr-resume --herdr-restore"), nil, "no session yet")
-  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1 "), nil, "trailing text is not the line")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1 x"), nil, "text after the id is not the line")
   check.eq(t.restore_target(t.RESTORE_PREFIX .. "a/b"), nil, "a path is not a session id")
   check.eq(t.restore_target("maki --resume sess1"), nil, "another agent's command is not ours")
+  check.eq(t.restore_target(""), nil)
   check.eq(t.restore_target(nil), nil)
 end
 
-cases.restore_prefix_follows_the_line_character_by_character = function(check)
-  check.eq(t.restore_prefix(""), true, "an empty composer can still become the line")
-  check.eq(t.restore_prefix("maki-herdr"), true)
-  check.eq(t.restore_prefix(t.RESTORE_PREFIX), true)
-  check.eq(t.restore_prefix(t.RESTORE_PREFIX .. "sess"), true)
-  check.eq(t.restore_prefix("maki herdr"), false, "typing something else disarms the handler")
-  check.eq(t.restore_prefix(t.RESTORE_PREFIX .. "sess1 x"), false)
+cases.restore_target_ignores_the_enter_herdr_sends = function(check)
+  -- Herdr types the line and a carriage return; maki puts the return in the
+  -- composer as a newline. That newline is not part of the session id.
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1\n"), "sess1")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1\r\n"), "sess1")
+  check.eq(t.restore_target(t.RESTORE_PREFIX .. "sess1   "), "sess1")
+  check.eq(t.restore_target("\n" .. t.RESTORE_PREFIX .. "sess1"), nil, "a leading newline is not the line")
 end
 
 cases.metadata_argv_sets_title_and_token = function(check)
