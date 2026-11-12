@@ -72,7 +72,7 @@ cases.title_cap_keeps_utf8_whole = function(check)
 end
 
 cases.resume_argv_shape = function(check)
-  local argv = t.report_argv("/bin/herdr", "w1:p3", "sess1", "blocked", 42)
+  local argv = t.report_argv("/bin/herdr", "w1:p3", "sess1", "blocked", 42, "/src/repo")
   local joined = table.concat(argv, " ")
   check.eq(argv[1], "/bin/herdr")
   check.eq(argv[2], "pane")
@@ -83,18 +83,20 @@ cases.resume_argv_shape = function(check)
   check.has(joined, "--state blocked")
   check.has(joined, "--seq 42")
   check.has(joined, "--agent-session-id sess1")
-  check.has(joined, "-- maki --resume sess1", "the resume command is the last argument group")
+  check.has(joined, "-- maki-herdr-resume /src/repo sess1", "the resume command is the last argument group")
 end
 
 cases.resume_first_word_is_a_bare_name = function(check)
-  local argv = t.report_argv("/bin/herdr", "w1:p3", "s", "idle", 1)
+  local argv = t.report_argv("/bin/herdr", "w1:p3", "s", "idle", 1, "/src/repo")
   local dash
   for i, a in ipairs(argv) do
     if a == "--" then
       dash = i
     end
   end
-  check.eq(argv[dash + 1], "maki", "herdr requires a plain command name on PATH")
+  check.eq(argv[dash + 1], "maki-herdr-resume", "herdr requires a plain command name on PATH")
+  check.eq(argv[dash + 2], "/src/repo", "the wrapper enters the session directory first")
+  check.eq(argv[dash + 3], "s", "then resumes the session")
 end
 
 cases.metadata_argv_sets_title_and_token = function(check)

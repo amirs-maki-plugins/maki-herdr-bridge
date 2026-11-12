@@ -15,7 +15,7 @@ install prompt:
 
 ```lua
 maki.pack.add({
-  { src = "https://github.com/amirs-maki-plugins/maki-herdr-bridge", version = "v1.0.0" },
+  { src = "https://github.com/amirs-maki-plugins/maki-herdr-bridge", version = "v1.0.2" },
 })
 ```
 
@@ -39,8 +39,9 @@ What this gives you:
   screen.
 - `herdr agent wait`, `herdr agent prompt`, and notifications follow that
   state.
-- After a Herdr restart, the pane runs `maki --resume <id>` in the same
-  directory, so the same maki session comes back.
+- After a Herdr restart, the pane runs `maki-herdr-resume <dir> <id>` in the
+  same pane, so the session comes back in the directory it was last in,
+  including one changed by `/cd`.
 - The session title and the session directory appear in the agent row, through
   the `session` and `dir` tokens.
 
@@ -93,10 +94,21 @@ detects, `maki`.
   drops, which is the moment maki quits, so the call would die in flight.
   Herdr clears the agent and the resume command about a second after the pane
   returns to its shell prompt.
-- The resume command is `maki --resume <id>`. It does not carry maki start
-  flags such as a model or a mode, and it does not carry a `/cd` inside maki:
-  maki sets a resumed session's directory to the directory it starts in, which
-  is the pane directory Herdr restores.
+- The resume command is `maki-herdr-resume <dir> <id>`, a small wrapper on
+  `PATH` that enters `<dir>` and then runs `maki --resume <id>`. Install it as
+  `~/.local/bin/maki-herdr-resume`:
+
+  ```sh
+  #!/bin/sh
+  dir=$1
+  sid=$2
+  [ -n "$sid" ] && shift 2
+  [ -n "$dir" ] && [ -d "$dir" ] && cd "$dir"
+  exec maki --resume "$sid" "$@"
+  ```
+
+  Without the wrapper Herdr falls back to a plain shell in the pane directory.
+  The command does not carry maki start flags such as a model or a mode.
 - Herdr does not restore metadata after a server restart. The next maki start
   reports the title again.
 - A second maki in the same pane competes with the first one for the pane.

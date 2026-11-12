@@ -46,8 +46,8 @@ local function next_seq(prev, now)
   return math.max((prev or 0) + 1, (now or os.time()) * 1000)
 end
 
-local function same_report(last, sid, state)
-  return last ~= nil and last.sid == sid and last.state == state
+local function same_report(last, sid, state, cwd)
+  return last ~= nil and last.sid == sid and last.state == state and last.cwd == cwd
 end
 
 -- Surrounding blanks and control characters would make herdr's stored value
@@ -76,7 +76,7 @@ local function normalize_title(title)
   return title
 end
 
-local function report_argv(bin, pane, sid, state, seq)
+local function report_argv(bin, pane, sid, state, seq, cwd)
   return {
     bin,
     "pane",
@@ -93,10 +93,12 @@ local function report_argv(bin, pane, sid, state, seq)
     "--agent-session-id",
     sid,
     -- Herdr restores the pane in its own directory and runs this there. The
-    -- first word must be a plain command name on PATH, never a path.
+    -- first word must be a plain command name on PATH, never a path. The
+    -- wrapper enters the directory the session was last in, because herdr
+    -- saves the pane's spawn directory, not one a /cd changed.
     "--",
-    "maki",
-    "--resume",
+    "maki-herdr-resume",
+    cwd or "",
     sid,
   }
 end
@@ -213,7 +215,7 @@ local function launch(item)
   state_seq = next_seq(state_seq)
   in_flight = true
   active = item
-  local argv = report_argv(bin, pane, item.sid, item.state, state_seq)
+  local argv = report_argv(bin, pane, item.sid, item.state, state_seq, item.cwd)
   local id = fn.jobstart(argv, {
     scope = "plugin",
     stdout = false,
@@ -249,13 +251,13 @@ pump = function()
   end
   local item = queued
   queued = nil
-  if same_report(sent, item.sid, item.state) then
+  if same_report(sent, item.sid, item.state, item.cwd) then
     return
   end
   launch(item)
 end
 
-local function send_state(sid, state)
+local function send_state(sid, state, cwd)
   if not sid or not state then
     return
   end
@@ -264,10 +266,10 @@ local function send_state(sid, state)
   -- While a report is in flight, it, not the last accepted one, is what the
   -- next state has to differ from.
   local baseline = in_flight and active or sent
-  if same_report(baseline, sid, state) or same_report(queued, sid, state) then
+  if same_report(baseline, sid, state, cwd) or same_report(queued, sid, state, cwd) then
     return
   end
-  queued = { sid = sid, state = state }
+  queued = { sid = sid, state = state, cwd = cwd }
   pump()
 end
 
@@ -298,7 +300,7 @@ local function sync_focused()
     -- The UI has no session yet, or the host is detaching.
     return false
   end
-  send_state(s.id, state_for(s.status))
+  send_state(s.id, state_for(s.status), s.cwd)
   send_title(s.title, dir_name(s.cwd))
   return true
 end
@@ -320,7 +322,20 @@ end
 maki.api.create_autocmd("SessionStatusChanged", {
   callback = function(ev)
     if ev.data.focused then
-      send_state(ev.data.session_id, state_for(ev.data.status))
+      local cur = maki.session.read()
+      send_state(ev.data.session_id, state_for(ev.data.status), cur and cur.cwd or nil)
+    end
+  end,
+})
+
+-- A /cd must reach herdr: the resume command carries the directory, and the
+-- pane's saved spawn directory never changes.
+maki.api.create_autocmd("SessionCwdChanged", {
+  callback = function(ev)
+    if ev.data.focused then
+      local cur = maki.session.read()
+      send_state(cur and cur.id or ev.data.session_id, cur and state_for(cur.status) or nil, ev.data.cwd)
+      send_title(cur and cur.title or nil, dir_name(ev.data.cwd))
     end
   end,
 })
